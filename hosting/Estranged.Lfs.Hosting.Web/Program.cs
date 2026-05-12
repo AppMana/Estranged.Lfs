@@ -47,6 +47,11 @@ bool   s3Accel     = bool.Parse(cfg["S3_ACCELERATION"] ?? "false");
 string azConn      = cfg["LFS_AZUREBLOB_CONNECTIONSTRING"];
 string azContainer = cfg["LFS_AZUREBLOB_CONTAINERNAME"];
 string s3Endpoint  = cfg["AWS_ENDPOINT_URL_S3"];     // SeaweedFS S3 endpoint, optional
+string fallbackBucket = cfg["LFS_FALLBACK_BUCKET"];  // old AWS LFS bucket, optional read-through only
+string fallbackRegion = cfg["LFS_FALLBACK_AWS_REGION"] ?? cfg["AWS_REGION"] ?? cfg["AWS_DEFAULT_REGION"];
+string fallbackAk     = cfg["LFS_FALLBACK_AWS_ACCESS_KEY_ID"];
+string fallbackSk     = cfg["LFS_FALLBACK_AWS_SECRET_ACCESS_KEY"];
+string fallbackEndpoint = cfg["LFS_FALLBACK_AWS_ENDPOINT_URL_S3"];
 
 bool isS3        = !string.IsNullOrWhiteSpace(lfsBucket);
 bool isAzure     = !string.IsNullOrWhiteSpace(azConn);
@@ -63,6 +68,21 @@ if (new[] { isDictAuth, isGhAuth, isBbAuth, isKcAuth }.Count(x => x) != 1)
 
 var services = builder.Services;
 
+static AmazonS3Client CreateS3Client(string endpoint, string region, string accessKey, string secretKey, bool accelerate)
+{
+    var s3Config = new AmazonS3Config { UseAccelerateEndpoint = accelerate };
+    if (!string.IsNullOrWhiteSpace(region))
+        s3Config.RegionEndpoint = RegionEndpoint.GetBySystemName(region);
+    if (!string.IsNullOrWhiteSpace(endpoint))
+    {
+        s3Config.ServiceURL = endpoint;
+        s3Config.ForcePathStyle = true;
+    }
+    return !string.IsNullOrWhiteSpace(accessKey) && !string.IsNullOrWhiteSpace(secretKey)
+        ? new AmazonS3Client(new BasicAWSCredentials(accessKey, secretKey), s3Config)
+        : new AmazonS3Client(s3Config);
+}
+
 if      (isDictAuth) services.AddLfsDictionaryAuthenticator(new Dictionary<string, string> { { lfsUser, lfsPass } });
 else if (isGhAuth)   services.AddLfsGitHubAuthenticator(new GitHubAuthenticatorConfig    { Organisation = ghOrg, Repository = ghRepo });
 else if (isBbAuth)   services.AddLfsBitBucketAuthenticator(new BitBucketAuthenticatorConfig { Workspace = bbWs, Repository = bbRepo });
@@ -70,26 +90,21 @@ else if (isKcAuth)   services.AddLfsKeycloakAuthenticator(new KeycloakAuthentica
 
 if (isS3)
 {
-    var s3Config = new AmazonS3Config { UseAccelerateEndpoint = s3Accel };
     string awsRegion = cfg["AWS_REGION"] ?? cfg["AWS_DEFAULT_REGION"];
-    if (!string.IsNullOrWhiteSpace(awsRegion))
-        s3Config.RegionEndpoint = RegionEndpoint.GetBySystemName(awsRegion);
-    if (!string.IsNullOrWhiteSpace(s3Endpoint))
-    {
-        // SeaweedFS / non-AWS path: ServiceURL + path style.
-        s3Config.ServiceURL = s3Endpoint;
-        s3Config.ForcePathStyle = true;
-    }
     // Force env-var creds when AWS_ACCESS_KEY_ID is present. The .NET
     // SDK's default chain prefers ~/.aws/credentials over env vars, so
     // without this a stale local profile would silently override the
     // pod's mounted Secret.
     string awsAk = cfg["AWS_ACCESS_KEY_ID"];
     string awsSk = cfg["AWS_SECRET_ACCESS_KEY"];
-    AmazonS3Client s3Client = !string.IsNullOrWhiteSpace(awsAk) && !string.IsNullOrWhiteSpace(awsSk)
-        ? new AmazonS3Client(new BasicAWSCredentials(awsAk, awsSk), s3Config)
-        : new AmazonS3Client(s3Config);
+    AmazonS3Client s3Client = CreateS3Client(s3Endpoint, awsRegion, awsAk, awsSk, s3Accel);
     services.AddSingleton<IAmazonS3>(s3Client);
+    if (!string.IsNullOrWhiteSpace(fallbackBucket))
+    {
+        services.AddSingleton(new FallbackS3(
+            CreateS3Client(fallbackEndpoint, fallbackRegion, fallbackAk, fallbackSk, false),
+            new S3BlobAdapterConfig { Bucket = fallbackBucket, KeyPrefix = "" }));
+    }
     services.AddHttpContextAccessor();
     services.AddScoped<IBlobAdapter>(sp =>
     {
@@ -97,7 +112,9 @@ if (isS3)
         string org = http?.Request.RouteValues.TryGetValue("org", out object orgValue) == true ? orgValue?.ToString() : null;
         string repo = http?.Request.RouteValues.TryGetValue("repo", out object repoValue) == true ? repoValue?.ToString() : null;
         string keyPrefix = string.IsNullOrWhiteSpace(org) || string.IsNullOrWhiteSpace(repo) ? "" : $"{org}/{repo}/";
-        return new S3BlobAdapter(sp.GetRequiredService<IAmazonS3>(), new S3BlobAdapterConfig { Bucket = lfsBucket, KeyPrefix = keyPrefix });
+        IBlobAdapter primary = new S3BlobAdapter(sp.GetRequiredService<IAmazonS3>(), new S3BlobAdapterConfig { Bucket = lfsBucket, KeyPrefix = keyPrefix });
+        FallbackS3 fallback = sp.GetService<FallbackS3>();
+        return fallback == null ? primary : new FallbackBlobAdapter(primary, new S3BlobAdapter(fallback.Client, fallback.Config));
     });
 }
 else if (isAzure)
@@ -119,3 +136,5 @@ app.MapGet("/healthz", () => Results.Ok(new { ok = true, mode = isS3 ? "s3" : "a
 app.UseRouting();
 app.UseEndpoints(e => e.MapControllers());
 app.Run();
+
+sealed record FallbackS3(AmazonS3Client Client, S3BlobAdapterConfig Config);
