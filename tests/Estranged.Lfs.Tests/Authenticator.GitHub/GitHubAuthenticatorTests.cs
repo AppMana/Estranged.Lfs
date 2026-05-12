@@ -40,8 +40,8 @@ namespace Estranged.Lfs.Tests.Authenticator.GitHub
                 BaseAddress = new Uri("https://www.example.com/")
             }, factory.Object);
 
-            await authenticator.Authenticate("username", "password", LfsPermission.Read, CancellationToken.None);
-            await authenticator.Authenticate("username", "password", LfsPermission.Write, CancellationToken.None);
+            await authenticator.Authenticate("username", "password", "organisation", "repository", LfsPermission.Read, CancellationToken.None);
+            await authenticator.Authenticate("username", "password", "organisation", "repository", LfsPermission.Write, CancellationToken.None);
         }
 
         [Fact]
@@ -63,7 +63,7 @@ namespace Estranged.Lfs.Tests.Authenticator.GitHub
                 BaseAddress = new Uri("https://www.example.com/")
             }, factory.Object);
 
-            await Assert.ThrowsAsync<InvalidOperationException>(() => authenticator.Authenticate("username", "password", LfsPermission.Write, CancellationToken.None));
+            await Assert.ThrowsAsync<InvalidOperationException>(() => authenticator.Authenticate("username", "password", "organisation", "repository", LfsPermission.Write, CancellationToken.None));
         }
 
         [Fact]
@@ -85,7 +85,7 @@ namespace Estranged.Lfs.Tests.Authenticator.GitHub
                 BaseAddress = new Uri("https://www.example.com/")
             }, factory.Object);
 
-            await Assert.ThrowsAsync<NotFoundException>(() => authenticator.Authenticate("username", "password", LfsPermission.Write, CancellationToken.None));
+            await Assert.ThrowsAsync<NotFoundException>(() => authenticator.Authenticate("username", "password", "organisation", "repository", LfsPermission.Write, CancellationToken.None));
         }
     }
 }

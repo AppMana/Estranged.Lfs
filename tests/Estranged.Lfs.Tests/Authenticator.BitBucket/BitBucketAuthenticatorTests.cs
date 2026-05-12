@@ -35,8 +35,8 @@ namespace Estranged.Lfs.Tests.Authenticator.BitBucket
                 BaseAddress = new Uri("https://www.example.com/")
             }, factory.Object);
 
-            await authenticator.Authenticate("username", "password", LfsPermission.Read, CancellationToken.None);
-            await authenticator.Authenticate("username", "password", LfsPermission.Write, CancellationToken.None);
+            await authenticator.Authenticate("username", "password", "workspace", "repository", LfsPermission.Read, CancellationToken.None);
+            await authenticator.Authenticate("username", "password", "workspace", "repository", LfsPermission.Write, CancellationToken.None);
         }
 
         [Fact]
@@ -58,7 +58,7 @@ namespace Estranged.Lfs.Tests.Authenticator.BitBucket
                 BaseAddress = new Uri("https://www.example.com/")
             }, factory.Object);
 
-            await Assert.ThrowsAsync<HttpRequestException>(() => authenticator.Authenticate("username", "password", LfsPermission.Read, CancellationToken.None));
+            await Assert.ThrowsAsync<HttpRequestException>(() => authenticator.Authenticate("username", "password", "workspace", "repository", LfsPermission.Read, CancellationToken.None));
         }
     }
 }
