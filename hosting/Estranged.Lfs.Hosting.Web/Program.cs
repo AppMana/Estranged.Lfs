@@ -140,10 +140,15 @@ if (isS3)
         string repo = http?.Request.RouteValues.TryGetValue("repo", out object repoValue) == true ? repoValue?.ToString() : null;
         string keyPrefix = string.IsNullOrWhiteSpace(org) || string.IsNullOrWhiteSpace(repo) ? "" : $"{org}/{repo}/";
         IBlobAdapter primary = new S3BlobAdapter(sp.GetRequiredService<IAmazonS3>(), new S3BlobAdapterConfig { Bucket = lfsBucket, KeyPrefix = keyPrefix });
-        var fallbacks = sp.GetService<IEnumerable<FallbackS3>>()?
+        var fallbacks = new List<IBlobAdapter>();
+        if (!string.IsNullOrWhiteSpace(keyPrefix))
+        {
+            fallbacks.Add(new S3BlobAdapter(sp.GetRequiredService<IAmazonS3>(), new S3BlobAdapterConfig { Bucket = lfsBucket, KeyPrefix = "" }));
+        }
+        fallbacks.AddRange(sp.GetService<IEnumerable<FallbackS3>>()?
             .Select(x => new S3BlobAdapter(x.Client, x.Config))
-            .ToList();
-        return fallbacks == null || fallbacks.Count == 0 ? primary : new FallbackBlobAdapter(primary, fallbacks);
+            .ToList() ?? new List<S3BlobAdapter>());
+        return fallbacks.Count == 0 ? primary : new FallbackBlobAdapter(primary, fallbacks);
     });
 }
 else if (isAzure)
