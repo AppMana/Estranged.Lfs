@@ -136,10 +136,15 @@ if (isS3)
     services.AddScoped<IBlobAdapter>(sp =>
     {
         var http = sp.GetRequiredService<IHttpContextAccessor>().HttpContext;
-        IBlobAdapter primary = new S3BlobAdapter(sp.GetRequiredService<IAmazonS3>(), new S3BlobAdapterConfig { Bucket = lfsBucket, KeyPrefix = "" });
+        string routePrefix = RouteObjectKeyPrefix(http);
+        IBlobAdapter primary = new S3BlobAdapter(sp.GetRequiredService<IAmazonS3>(), new S3BlobAdapterConfig { Bucket = lfsBucket, KeyPrefix = routePrefix });
         var fallbacks = new List<IBlobAdapter>();
         fallbacks.AddRange(sp.GetService<IEnumerable<FallbackS3>>()?
-            .Select(x => new S3BlobAdapter(x.Client, x.Config))
+            .Select(x => new S3BlobAdapter(x.Client, new S3BlobAdapterConfig
+            {
+                Bucket = x.Config.Bucket,
+                KeyPrefix = $"{x.Config.KeyPrefix ?? ""}{routePrefix}"
+            }))
             .ToList() ?? new List<S3BlobAdapter>());
         return fallbacks.Count == 0 ? primary : new FallbackBlobAdapter(primary, fallbacks);
     });
@@ -163,6 +168,23 @@ app.MapGet("/healthz", () => Results.Ok(new { ok = true, mode = isS3 ? "s3" : "a
 app.UseRouting();
 app.UseEndpoints(e => e.MapControllers());
 app.Run();
+
+static string RouteObjectKeyPrefix(HttpContext http)
+{
+    string org = http?.Request.RouteValues["org"]?.ToString();
+    string repo = http?.Request.RouteValues["repo"]?.ToString();
+    if (string.IsNullOrWhiteSpace(org) || string.IsNullOrWhiteSpace(repo))
+    {
+        throw new InvalidOperationException("LFS route did not include organisation and repository.");
+    }
+
+    if (org.Contains('/') || repo.Contains('/'))
+    {
+        throw new InvalidOperationException("LFS route values cannot contain '/'.");
+    }
+
+    return $"{org}/{repo}/";
+}
 
 sealed record FallbackS3(AmazonS3Client Client, S3BlobAdapterConfig Config);
 sealed record S3FallbackConfig(
